@@ -1,29 +1,40 @@
 """
-    Simplified Implementation of HiDDeN - MNIST Dataset & Simple Noise Addition
-    Reference: HiDDeN: Hiding data with deep networks (Zhu et. al, 2018)
+    Implementation of HiDDeN - Hiding Data in the MNIST Dataset
+    Reference: "HiDDeN: Hiding data with deep networks (Zhu et. al, 2018)"
 """
 import tensorflow as tf
 import numpy as np
 from matplotlib import pyplot as plt
+from sklearn.model_selection import train_test_split
+
+import utils
 
 # Get Dataset
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
-# Transform Dataset
-data = x_train
-data = np.expand_dims(data, -1)
-input_shape = data.shape[1:]
-data = data.astype(np.float32)
+# split train into train and validation
+x_train, x_val, y_train, y_val = train_test_split(
+    x_train, y_train, test_size=0.05, random_state=123)
 
-# Restrict to values between 0 and 1
-data = (data / 255.0)
+# transform data
+def transform_data(x):
+    x = np.expand_dims(x, -1)
+    x = x.astype(np.float32)
+    x /= 255.0
+    return x
+
+data_train = transform_data(x_train)
+data_test = transform_data(x_test)
+data_val = transform_data(x_val)
+
+input_shape = data_train.shape[1:]
 
 ####################
 # EncoderDecoder
 
 def encoder_net(cover_image, message, input_shape, msg_length):
     """ Create Encoder Net """
-    
+
     # Message Block
     m = tf.keras.layers.RepeatVector(
         input_shape[0] * input_shape[1])(message)
@@ -162,9 +173,13 @@ def discriminator_loss(logits, y_expected):
         y_pred=logits,
         from_logits=True)
 
+def binarize(x):
+    return tf.math.round(
+                tf.clip_by_value(x, clip_value_min=0, clip_value_max=1))
+
 def decoding_error_rate(y, y_hat):
     """ Mean Error Rate across Batch """
-    return tf.reduce_mean(tf.math.abs(y - tf.math.round(y_hat)), axis=0)
+    return tf.reduce_mean(tf.math.abs(y - binarize(y_hat)), axis=0)
 
 
 #################
@@ -214,7 +229,8 @@ def train_step(
             loss_discriminator_cover + loss_discriminator_encoded)
 
         # total loss encoder decoder
-        loss_encoder_decoder = loss_weight_recover * loss_recover + \
+        loss_encoder_decoder = \
+            loss_weight_recover * loss_recover + \
             loss_weight_distortion * loss_distortion + \
             loss_weight_adversarial * loss_adversarial
 
@@ -229,7 +245,8 @@ def train_step(
     optimizer_discriminator.apply_gradients(
         zip(grads_discriminator, discriminator.trainable_variables))
     
-    # Record losses
+    # Record losses (only one batch atm)
+    # TODO: add tf.summary
     losses = {
         'encoder_decoder': loss_encoder_decoder,
         'discriminator': loss_discriminator,
@@ -242,10 +259,56 @@ def train_step(
     return losses
 
 
+def create_messages(batch_size, msg_length):
+    messages = tf.random.uniform(
+    [batch_size, msg_length], minval=0, maxval=2, dtype=tf.dtypes.int32)
+    messages = tf.cast(messages, dtype=tf.dtypes.float32)
+    return messages
+
+
+def evaluate_batches(n_batches, dataset, messages, encoder_decoder, discriminator):
+
+    dataset_iter = iter(dataset)
+
+    for step in range(0, n_batches):
+
+        cover_images = next(dataset_iter)
+
+        encoder_decoder_output = encoder_decoder(
+            inputs={'cover_image': cover_images, 'message': messages},
+            training=False)
+
+        discriminator_on_cover = discriminator(
+            inputs={'image': cover_images},
+            training=False)
+
+        discriminator_on_encoded = discriminator(
+            inputs={'image': encoder_decoder_output['encoded_image']},
+            training=False)
+
+        decoded_msgs = encoder_decoder_output['decoded_message']
+
+        bit_error_rate = tf.reduce_mean(tf.math.abs(
+            messages - binarize(decoded_msgs)))
+
+        false_positive_rate = tf.reduce_mean(
+            binarize(tf.sigmoid(discriminator_on_cover)))
+
+        true_positive_rate = tf.reduce_mean(
+            binarize(tf.sigmoid(discriminator_on_encoded)))
+
+        print("Step: {} ------------------------".format(step))
+        print("Bit error rate: {:.2f}".format(bit_error_rate))
+        print("Discriminator: False positive rate (cover images): {:.2f}".format(
+            false_positive_rate))
+        print("Discriminator: True positive rate (encoded images): {:.2f}".format(
+            true_positive_rate))
+
 #################
 # Training Loop
 
 batch_size = 32
+batch_size_val = 256
 n_steps = 100
 n_epochs = 20
 msg_length = 8
@@ -261,15 +324,16 @@ discriminator = discriminator_net(input_shape)
 optimizer_encoder_decoder = tf.keras.optimizers.Adam(1e-3)
 optimizer_discriminator = tf.keras.optimizers.Adam(1e-3)
 
-data_train = create_dataset(data, batch_size)
-
 for e in range(0, n_epochs):
-    data_train = create_dataset(data, batch_size)
+    dataset_train = create_dataset(data_train, batch_size)
 
-    for step, cover_images in enumerate(data_train):
+    for step, cover_images in enumerate(dataset_train):
 
+        #messages = create_messages(batch_size, msg_length)
+        # TODO: verify tf.function speed-up
+        # suspicion that messages = create_me... is way slower
         messages = tf.random.uniform(
-            [batch_size, msg_length], minval=0, maxval=2, dtype=tf.dtypes.int32)
+             [batch_size, msg_length], minval=0, maxval=2, dtype=tf.dtypes.int32)
         messages = tf.cast(messages, dtype=tf.dtypes.float32)
 
         losses = train_step(
@@ -279,70 +343,51 @@ for e in range(0, n_epochs):
             loss_weight_distortion=loss_weight_distortion,
             loss_weight_adversarial=loss_weight_adversarial)
 
+    # evaluate on validation batch
+    print("==========================================")
+    print("Epoch: {} Validation Metrics".format(e))
+    messages_val = create_messages(batch_size_val, msg_length)
+    dataset_val = create_dataset(data_val, batch_size_val)
+    evaluate_batches(1, dataset_val, messages_val, encoder_decoder, discriminator)
+
+    # print loss values
+    for loss, loss_value in losses.items():
+        print("Epoch: {:<2} Training Loss {:<20}: {:.5f}".format(
+            e, loss, float(loss_value.numpy())))
+
     # Plot Examples
+    # TODO: switch from training to val examples
     encoder_decoder_output = encoder_decoder(
         inputs={'cover_image': cover_images, 'message': messages},
         training=False)
 
-    mean_error_per_sample = decoding_error_rate(
-        messages, encoder_decoder_output['decoded_message'])
-    mean_error = tf.reduce_mean(mean_error_per_sample)
-
-    print("==========================================")
-    for loss, loss_value in losses.items():
-        print("Epoch: {:<2} Loss {:<20}: {:.5f}".format(
-            e, loss, float(loss_value.numpy())))
-    print("Epoch: {:<2} Decoder Error Rate (1 batch): {:.2f}".format(
-        e, mean_error))
-
-    for j in range(0, 2):
-        img_cover = cover_images[j:j+1, :, :, :]
-        img_encoded = encoder_decoder_output['encoded_image'][j]
-        img_encoded = tf.squeeze(img_encoded, -1)
-        img_cover = np.squeeze(img_cover)
-        img_diff = np.abs(img_cover - img_encoded)
-
-        fig = plt.figure(figsize=(8, 8))
-
-        plt.subplot(1, 3, 1)
-        plt.imshow(img_encoded, cmap='gray')
-        plt.axis('off')
-        plt.subplot(1, 3, 2)
-        plt.imshow(img_cover, cmap='gray')
-        plt.axis('off')
-        plt.subplot(1, 3, 3)
-        plt.imshow(img_diff, cmap='gray')
-        plt.axis('off')
-        plt.show()
+    fig = plt.figure(figsize=(4, 4))
+    utils.plot_examples(
+        3, cover_images, encoder_decoder_output['encoded_image'])
+    plt.tight_layout()
+    plt.show()
 
 
 #################
-# Plot some figures
+# Plot to Disk
 
 encoder_decoder_output = encoder_decoder(
     inputs={'cover_image': cover_images, 'message': messages},
     training=False)
 
-n_rows = 6
-n_cols = 3
-index = 0
 fig = plt.figure(figsize=(4, 8))
-for j in range(0, n_rows):
-    img_cover = cover_images[j:j+1, :, :, :]
-    img_encoded = encoder_decoder_output['encoded_image'][j]
-    img_encoded = tf.squeeze(img_encoded, -1)
-    img_cover = np.squeeze(img_cover)
-    img_diff = np.abs(img_cover - img_encoded)  
-    plt.subplot(n_rows, n_cols, index + 1)
-    plt.imshow(img_encoded, cmap='gray')
-    plt.axis('off')
-    plt.subplot(n_rows, n_cols, index + 2)
-    plt.imshow(img_cover, cmap='gray')
-    plt.axis('off')
-    plt.subplot(n_rows, n_cols, index + 3)
-    plt.imshow(img_diff, cmap='gray')
-    plt.axis('off')
-    index += 3
+utils.plot_examples(6, cover_images, encoder_decoder_output['encoded_image'])
 plt.tight_layout()
 plt.savefig('./examples.png', bbox_inches='tight',
             pad_inches=0)
+
+
+#################
+# Testing
+
+batch_size_test = 16
+messages_test = create_messages(batch_size_test, msg_length)
+dataset_test= create_dataset(data_test, batch_size_test)
+evaluate_batches(99, dataset_test, messages_test,
+                 encoder_decoder, discriminator)
+
