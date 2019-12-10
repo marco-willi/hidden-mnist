@@ -6,19 +6,18 @@ This is a preliminary implementation.
 
 ## Requirements
 
-- Tensorflow 2.0
-- Scikit-Learn
+See requirements.txt
 
 ## Examples
 
-Here some examples after training on a few epochs. From left to right: Cover Image, Encoded Image, Difference Image.
+Here some examples after training the model for a few epochs. From left to right: Cover Image, Encoded Image, Difference Image (magnified), Noise Image.
 
 ![image](examples.png)
 
 
 ## Open Points
 
-- Implement Noise Layers
+- Implement more Noise Layers (gaussian and dropout available)
 - Calibrate / Weight Losses
 - Inspect overfitting of discriminator
 - Summary writers / Model Savings

@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt
 from sklearn.model_selection import train_test_split
 
 import utils
+import nets
 
 # Get Dataset
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
@@ -28,121 +29,6 @@ data_test = transform_data(x_test)
 data_val = transform_data(x_val)
 
 input_shape = data_train.shape[1:]
-
-####################
-# EncoderDecoder
-
-def encoder_net(cover_image, message, input_shape, msg_length):
-    """ Create Encoder Net """
-
-    # Message Block
-    m = tf.keras.layers.RepeatVector(
-        input_shape[0] * input_shape[1])(message)
-    m = tf.keras.layers.Reshape((input_shape[0:2]) + (msg_length, ))(m)
-
-    # Image Processing Block
-    x = cover_image
-
-    for _ in range(0, 3):
-        x = tf.keras.layers.Conv2D(
-            filters=64,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding='same')(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.LeakyReLU()(x)
-
-    # Concatenate Message Block with Image Processing Block and Cover Image
-    x = tf.keras.layers.Concatenate(axis=-1)([m, x, cover_image])
-
-    # Encode Image
-    x = tf.keras.layers.Conv2D(
-        filters=64,
-        kernel_size=(3, 3),
-        strides=(1, 1),
-        padding='same')(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.LeakyReLU()(x)
-
-    encoded_img = tf.keras.layers.Conv2D(
-        filters=1,
-        kernel_size=(1, 1),
-        strides=(1, 1),
-        padding='valid',
-        activation='linear')(x)
-    return encoded_img
-
-
-def decoder_net(encoded_image, msg_length):
-    """ Decoder Net """
-
-    x = encoded_image
-
-    for _ in range(0, 3):
-        x = tf.keras.layers.Conv2D(
-            filters=64,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding='same')(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.LeakyReLU()(x)
-
-    x = tf.keras.layers.Conv2D(
-        filters=msg_length,
-        kernel_size=(3, 3),
-        strides=(1, 1),
-        padding='same')(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.LeakyReLU()(x)
-
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    decoded_message = tf.keras.layers.Dense(msg_length)(x)
-    return decoded_message
-
-
-def encoder_decoder_net(input_shape, msg_length):
-    """ EncoderDecoder Net """
-    message = tf.keras.Input(shape=(msg_length, ), name='message')
-    cover_image = tf.keras.Input(shape=input_shape, name='cover_image')
-
-    encoded_image = encoder_net(cover_image, message, input_shape, msg_length)
-    decoded_message = decoder_net(encoded_image, msg_length)
-
-    model = tf.keras.Model(
-        inputs={
-            'cover_image': cover_image,
-            'message': message},
-        outputs={
-            'encoded_image': encoded_image,
-            'decoded_message': decoded_message})
-    return model
-
-
-####################
-# Discriminator
-
-def discriminator_net(input_shape):
-    """ Discriminator Net: Identify Encoded Images """
-
-    image = tf.keras.Input(shape=input_shape)
-    x = image
-
-    for _ in range(0, 2):
-        x = tf.keras.layers.Conv2D(
-            filters=64,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding='same')(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.LeakyReLU()(x)
-    
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    logits = tf.keras.layers.Dense(1)(x)
-
-    model = tf.keras.Model(inputs=image, outputs=logits)
-
-    return model
-
 
 #################
 # input data
@@ -309,17 +195,19 @@ def evaluate_batches(n_batches, dataset, messages, encoder_decoder, discriminato
 
 batch_size = 32
 batch_size_val = 256
-n_steps = 100
 n_epochs = 20
 msg_length = 8
+
+# one of: identity, gaussian, dropout
+noise_type = 'gaussian'
 
 loss_weight_recover=1.0,
 loss_weight_distortion=0.7,
 loss_weight_adversarial=1e-3
 
 # Create Nets
-encoder_decoder = encoder_decoder_net(input_shape, msg_length)
-discriminator = discriminator_net(input_shape)
+encoder_decoder = nets.encoder_decoder(input_shape, msg_length, noise_type)
+discriminator = nets.discriminator(input_shape)
 
 optimizer_encoder_decoder = tf.keras.optimizers.Adam(1e-3)
 optimizer_discriminator = tf.keras.optimizers.Adam(1e-3)
@@ -362,11 +250,14 @@ for e in range(0, n_epochs):
         training=False)
 
     fig = plt.figure(figsize=(4, 4))
-    utils.plot_examples(
-        3, cover_images, encoder_decoder_output['encoded_image'])
+    images_to_plot = [
+        cover_images,
+        encoder_decoder_output['encoded_image'],
+        (cover_images - encoder_decoder_output['encoded_image']) * 10,
+        encoder_decoder_output['noised_image'], ]
+    utils.plot_examples(4, images_to_plot)
     plt.tight_layout()
     plt.show()
-
 
 #################
 # Plot to Disk
@@ -376,7 +267,12 @@ encoder_decoder_output = encoder_decoder(
     training=False)
 
 fig = plt.figure(figsize=(4, 8))
-utils.plot_examples(6, cover_images, encoder_decoder_output['encoded_image'])
+images_to_plot = [
+    cover_images,
+    encoder_decoder_output['encoded_image'],
+    (cover_images - encoder_decoder_output['encoded_image']) * 10,
+    encoder_decoder_output['noised_image']]
+utils.plot_examples(8, images_to_plot)
 plt.tight_layout()
 plt.savefig('./examples.png', bbox_inches='tight',
             pad_inches=0)
@@ -390,4 +286,3 @@ messages_test = create_messages(batch_size_test, msg_length)
 dataset_test= create_dataset(data_test, batch_size_test)
 evaluate_batches(99, dataset_test, messages_test,
                  encoder_decoder, discriminator)
-
