@@ -44,6 +44,7 @@ def encoder(cover_image, message, input_shape, msg_length):
         strides=(1, 1),
         padding='valid',
         activation='linear')(x)
+
     return encoded_img
 
 
@@ -80,6 +81,7 @@ def encoder_decoder(input_shape, msg_length, noise_type):
     cover_image = tf.keras.Input(shape=input_shape, name='cover_image')
 
     encoded_image = encoder(cover_image, message, input_shape, msg_length)
+    # TODO: consider clipping image to valid range
 
     if noise_type == 'identity':
         noised_image = encoded_image

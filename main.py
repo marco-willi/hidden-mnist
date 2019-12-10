@@ -177,16 +177,20 @@ def evaluate_batches(n_batches, dataset, messages, encoder_decoder, discriminato
         bit_error_rate = tf.reduce_mean(tf.math.abs(
             messages - binarize(decoded_msgs)))
 
-        false_positive_rate = tf.reduce_mean(
-            binarize(tf.sigmoid(discriminator_on_cover)))
+        true_negative_rate = tf.reduce_mean(
+            binarize(1 - tf.sigmoid(discriminator_on_cover)))
 
         true_positive_rate = tf.reduce_mean(
             binarize(tf.sigmoid(discriminator_on_encoded)))
 
+        dist_loss = distortion_loss(y=cover_images, y_hat=
+            encoder_decoder_output['encoded_image'])
+
         print("Step: {} ------------------------".format(step))
         print("Bit error rate: {:.2f}".format(bit_error_rate))
-        print("Discriminator: False positive rate (cover images): {:.2f}".format(
-            false_positive_rate))
+        print("Distortion loss: {:.6f}".format(dist_loss))
+        print("Discriminator: True negative rate (cover images): {:.2f}".format(
+            true_negative_rate))
         print("Discriminator: True positive rate (encoded images): {:.2f}".format(
             true_positive_rate))
 
@@ -237,7 +241,7 @@ for e in range(0, n_epochs):
     messages_val = create_messages(batch_size_val, msg_length)
     dataset_val = create_dataset(data_val, batch_size_val)
     evaluate_batches(1, dataset_val, messages_val, encoder_decoder, discriminator)
-
+    print("Epoch: {} Training Metrics".format(e))
     # print loss values
     for loss, loss_value in losses.items():
         print("Epoch: {:<2} Training Loss {:<20}: {:.5f}".format(
@@ -249,15 +253,20 @@ for e in range(0, n_epochs):
         inputs={'cover_image': cover_images, 'message': messages},
         training=False)
 
-    fig = plt.figure(figsize=(4, 4))
+    fig = plt.figure(figsize=(4, 2))
+    fig.suptitle('Epoch: {:02d}, Noise: {}'.format(e, noise_type), fontsize=8, ha='left', va='top', x=0, y=1)
     images_to_plot = [
         cover_images,
         encoder_decoder_output['encoded_image'],
         (cover_images - encoder_decoder_output['encoded_image']) * 10,
         encoder_decoder_output['noised_image'], ]
-    utils.plot_examples(4, images_to_plot)
+    utils.plot_examples(2, images_to_plot)
     plt.tight_layout()
+    fig.savefig('./plots/examples_epoch_{:02d}_{}_noise.png'.format(e, noise_type),
+        bbox_inches='tight',
+        pad_inches=0)
     plt.show()
+
 
 #################
 # Plot to Disk
@@ -274,7 +283,7 @@ images_to_plot = [
     encoder_decoder_output['noised_image']]
 utils.plot_examples(8, images_to_plot)
 plt.tight_layout()
-plt.savefig('./examples.png', bbox_inches='tight',
+plt.savefig('./plots/examples_{}_noise.png'.format(noise_type), bbox_inches='tight',
             pad_inches=0)
 
 
